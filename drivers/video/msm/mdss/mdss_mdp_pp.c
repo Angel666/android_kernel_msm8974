@@ -91,6 +91,24 @@ static struct mdp_ar_gc_lut_data lin_gc_data[GC_LUT_SEGMENTS] = {
 	{4095,   0, 0}, {4095, 0, 32640}
 };
 
+/*
+ * To program a linear LUT we need to make the slope to be 1/16 to enable
+ * conversion from 12bit to 8bit. Also in cases where post blend values might
+ * cross 255, we need to cap them now to 255. The offset of the final segment
+ * would be programmed in such a case and we set the value to 32460 which is
+ * 255 in U8.7.
+ */
+static struct mdp_ar_gc_lut_data lin_gc_data[GC_LUT_SEGMENTS] = {
+	{   0, 256, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0,     0},
+	{4095,   0, 0}, {4095, 0, 32640}
+};
+
 #define CSC_MV_OFF	0x0
 #define CSC_BV_OFF	0x2C
 #define CSC_LV_OFF	0x14
@@ -1381,17 +1399,11 @@ static int pp_mixer_setup(u32 disp_num,
 			pgc_config->num_b_stages = GC_LUT_SEGMENTS;
 			pp_update_argc_lut(addr, pgc_config);
 		}
-		if (pgc_config->flags & MDP_PP_OPS_DISABLE)
-			pp_sts->argc_sts &= ~PP_STS_ENABLE;
-		else if (pgc_config->flags & MDP_PP_OPS_ENABLE)
-			pp_sts->argc_sts |= PP_STS_ENABLE;
-
 		ctl->flush_bits |= lm_bitmask;
 	}
 
 	/* update LM opmode if LM needs flush */
-	if ((pp_sts->argc_sts & PP_STS_ENABLE) &&
-		(flags & PP_FLAGS_DIRTY_ARGC)) {
+	if (flags & PP_FLAGS_DIRTY_ARGC) {
 		addr = mixer->base + MDSS_MDP_REG_LM_OP_MODE;
 		opmode = readl_relaxed(addr);
 		opmode |= (1 << 0); /* GC_LUT_EN */
