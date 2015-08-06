@@ -221,6 +221,26 @@ struct kgsl_memobj_node {
 	unsigned long priv;
 };
 
+/* Flag to mark the memobj_node as a preamble */
+#define MEMOBJ_PREAMBLE BIT(0)
+/* Flag to mark that the memobj_node should not go to the hadrware */
+#define MEMOBJ_SKIP BIT(1)
+
+/**
+ * struct kgsl_memobj_node - Memory object descriptor
+ * @node: Local list node for the cmdbatch
+ * @cmdbatch: Cmdbatch the node belongs to
+ * @addr: memory start address
+ * @sizedwords: size of memory @addr
+ * @flags: any special case flags
+ */
+struct kgsl_memobj_node {
+	struct list_head node;
+	unsigned long gpuaddr;
+	size_t sizedwords;
+	unsigned long priv;
+};
+
 /**
  * struct kgsl_cmdbatch - KGSl command descriptor
  * @device: KGSL GPU device that the command was created for

@@ -80,7 +80,8 @@ TRACE_EVENT(kgsl_issueibcmds,
 			{ KGSL_CMDBATCH_CTX_SWITCH, "CTX_SWITCH" },
 			{ KGSL_CMDBATCH_SYNC, "SYNC" },
 			{ KGSL_CMDBATCH_END_OF_FRAME, "EOF" },
-			{ KGSL_CMDBATCH_PWR_CONSTRAINT, "PWR_CONSTRAINT" })
+			{ KGSL_CMDBATCH_PWR_CONSTRAINT, "PWR_CONSTRAINT" },
+			{ KGSL_CMDBATCH_MEMLIST, "MEMLIST" })
 			: "None",
 		__entry->result,
 		__print_symbolic(__entry->drawctxt_type,

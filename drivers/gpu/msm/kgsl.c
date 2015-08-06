@@ -2273,10 +2273,22 @@ static struct kgsl_cmdbatch *_kgsl_cmdbatch_create(struct kgsl_device *device,
 		return cmdbatch;
 
 	if (!(flags & KGSL_CMDBATCH_SYNC)) {
-		if (copy_from_user(cmdbatch->ibdesc, (void __user *) cmdlist,
-			sizeof(struct kgsl_ibdesc) * numcmds)) {
-			ret = -EFAULT;
-			goto done;
+		struct kgsl_ibdesc ibdesc;
+		void  __user *uptr = (void  __user *) cmdlist;
+
+		for (i = 0; i < numcmds; i++) {
+			memset(&ibdesc, 0, sizeof(ibdesc));
+
+			if (copy_from_user(&ibdesc, uptr, sizeof(ibdesc))) {
+				ret = -EFAULT;
+				goto done;
+			}
+
+			ret = kgsl_cmdbatch_add_memobj(cmdbatch, &ibdesc);
+			if (ret)
+				goto done;
+
+			uptr += sizeof(ibdesc);
 		}
 	}
 
