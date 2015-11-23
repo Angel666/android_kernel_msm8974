@@ -1403,12 +1403,6 @@ static int __devinit msm_rpm_dev_probe(struct platform_device *pdev)
 
 	smd_disable_read_intr(msm_rpm_data.ch_info);
 
-	msm_rpm_smd_wq = alloc_workqueue("rpm-smd",
-			WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
-	if (!msm_rpm_smd_wq)
-		return -EINVAL;
-	queue_work(msm_rpm_smd_wq, &msm_rpm_data.work);
-
 skip_smd_init:
 	of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
 
