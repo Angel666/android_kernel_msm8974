@@ -185,6 +185,17 @@ static void bluesleep_sleep_work(struct work_struct *work)
 			set_bit(BT_ASLEEP, &flags);
 			/*Deactivating UART */
 			hsuart_power(0);
+#ifdef BT_DMA_QOS_REQUEST
+			if(bsi->dma_qos_request == REQUESTED) {
+				pm_qos_update_request(&bsi->dma_qos, 0x7FFFFFF);
+			}
+#endif /* BT_DMA_QOS_REQUEST */
+
+			/*Deactivating UART */
+			/* UART clk is not turned off immediately. Release
+			 * wakelock after 125 ms.
+			 */
+			wake_lock_timeout(&bsi->wake_lock, HZ / 8);
 		} else {
 
 		  mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
@@ -399,7 +410,18 @@ static void bluesleep_stop(void)
 	spin_unlock_irqrestore(&rw_lock, irq_flags);
 	if (disable_irq_wake(bsi->host_wake_irq))
 		BT_ERR("Couldn't disable hostwake IRQ wakeup mode\n");
-	free_irq(bsi->host_wake_irq, NULL);
+#endif
+
+#ifdef BT_DMA_QOS_REQUEST
+	if(bsi->dma_qos_request == REQUESTED) {
+		pm_qos_remove_request(&bsi->dma_qos);
+		bsi->dma_qos_request = NOT_REQUESTED;
+	}
+#endif /* BT_DMA_QOS_REQUEST */
+
+	wake_lock_timeout(&bsi->wake_lock, HZ / 8);
+
+	bsi->uport = NULL;
 }
 /**
  * Read the <code>BT_WAKE</code> GPIO pin value via the proc interface.
