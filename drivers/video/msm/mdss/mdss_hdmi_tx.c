@@ -3251,7 +3251,6 @@ static int hdmi_tx_panel_event_handler(struct mdss_panel_data *panel_data,
 		break;
 
 	case MDSS_EVENT_PANEL_OFF:
-		mutex_lock(&hdmi_ctrl->power_mutex);
 		if (hdmi_ctrl->panel_power_on) {
 			mutex_unlock(&hdmi_ctrl->power_mutex);
 			hdmi_tx_config_avmute(hdmi_ctrl, 1);
