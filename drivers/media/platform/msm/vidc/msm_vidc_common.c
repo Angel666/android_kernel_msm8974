@@ -3450,6 +3450,8 @@ int msm_vidc_check_session_supported(struct msm_vidc_inst *inst)
 	if (rc) {
 		change_inst_state(inst, MSM_VIDC_CORE_INVALID);
 		msm_comm_kill_session(inst);
+		msm_vidc_queue_v4l2_event(inst,
+					V4L2_EVENT_MSM_VIDC_HW_OVERLOAD);
 		dprintk(VIDC_WARN,
 			"%s: Hardware is overloaded\n", __func__);
 	}
