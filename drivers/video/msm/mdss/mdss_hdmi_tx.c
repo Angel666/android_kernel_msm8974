@@ -2654,7 +2654,6 @@ static int hdmi_tx_power_off(struct mdss_panel_data *panel_data)
 	hdmi_ctrl->panel_power_on = false;
 	mutex_unlock(&hdmi_ctrl->power_mutex);
 
-	mutex_lock(&hdmi_ctrl->mutex);
 	if (hdmi_ctrl->hpd_off_pending) {
 		hdmi_ctrl->hpd_off_pending = false;
 		mutex_unlock(&hdmi_ctrl->mutex);
@@ -2694,6 +2693,16 @@ static int hdmi_tx_power_on(struct mdss_panel_data *panel_data)
 		DEV_ERR("%s: HDMI on is not possible w/o cable detection.\n",
 			__func__);
 		return -EPERM;
+	}
+
+	if (hdmi_ctrl->pdata.primary) {
+		timeout = wait_for_completion_timeout(
+			&hdmi_ctrl->hpd_done, HZ);
+		if (!timeout) {
+			DEV_ERR("%s: cable connection hasn't happened yet\n",
+				__func__);
+			return -ETIMEDOUT;
+		}
 	}
 
 	rc = hdmi_tx_set_video_fmt(hdmi_ctrl, &panel_data->panel_info);
@@ -2872,14 +2881,11 @@ static int hdmi_tx_sysfs_enable_hpd(struct hdmi_tx_ctrl *hdmi_ctrl, int on)
 			INIT_COMPLETION(hdmi_ctrl->hpd_off_done);
 			timeout = wait_for_completion_timeout(
 				&hdmi_ctrl->hpd_off_done, HZ);
-			if (!timeout) {
-				hdmi_ctrl->hpd_off_pending = false;
+
+			if (!timeout)
 				DEV_ERR("%s: hpd off still pending\n",
 					__func__);
-				return 0;
-			}
 		}
-
 		rc = hdmi_tx_hpd_on(hdmi_ctrl);
 	} else {
 		mutex_lock(&hdmi_ctrl->power_mutex);
@@ -3251,6 +3257,7 @@ static int hdmi_tx_panel_event_handler(struct mdss_panel_data *panel_data,
 		break;
 
 	case MDSS_EVENT_PANEL_OFF:
+		mutex_lock(&hdmi_ctrl->power_mutex);
 		if (hdmi_ctrl->panel_power_on) {
 			mutex_unlock(&hdmi_ctrl->power_mutex);
 			hdmi_tx_config_avmute(hdmi_ctrl, 1);
