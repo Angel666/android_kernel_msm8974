@@ -641,7 +641,7 @@ void msm_cpp_do_tasklet(unsigned long data)
 					CPP_DBG("delete timer.\n");
 					msm_cpp_clear_timer(cpp_dev);
 					msm_cpp_notify_frame_done(cpp_dev,
-						VIDIOC_MSM_BUF_MNGR_BUF_DONE, 0);
+						VIDIOC_MSM_BUF_MNGR_BUF_DONE);
 				} else if ((msg_id ==
 					MSM_CPP_MSG_ID_FRAME_NACK)
 					&& (atomic_read(&cpp_timer.used))) {
@@ -1217,16 +1217,34 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 	msm_camera_io_w_mb(0xFFFF,
 		cpp_timer.data.cpp_dev->base +
 		MSM_CPP_MICRO_IRQGEN_CLR);
-	mutex_lock(&cpp_timer.data.cpp_dev->mutex);
-	msm_cpp_dump_frame_cmd(cpp_timer.data.processed_frame->cpp_cmd_msg,
-		cpp_timer.data.processed_frame->msg_len);
-	msm_cpp_notify_frame_done(cpp_timer.data.cpp_dev,
-		VIDIOC_MSM_BUF_MNGR_PUT_BUF, 1);
-	atomic_set(&cpp_timer.used, 0);
-	cpp_timer.data.processed_frame = NULL;
-	cpp_timer.data.cpp_dev->timeout_trial_cnt = 0;
-	mutex_unlock(&cpp_timer.data.cpp_dev->mutex);
-	pr_info("exit\n");
+
+	if (cpp_timer.data.cpp_dev->timeout_trial_cnt >=
+		MSM_CPP_MAX_TIMEOUT_TRIAL) {
+		pr_info("Max trial reached\n");
+		msm_cpp_notify_frame_done(cpp_timer.data.cpp_dev,
+			VIDIOC_MSM_BUF_MNGR_PUT_BUF);
+		cpp_timer.data.cpp_dev->timeout_trial_cnt = 0;
+		return;
+	}
+
+	this_frame = cpp_timer.data.processed_frame;
+	pr_err("Starting timer to fire in %d ms. (jiffies=%lu)\n",
+		CPP_CMD_TIMEOUT_MS, jiffies);
+	ret = mod_timer(&cpp_timer.cpp_timer,
+		jiffies + msecs_to_jiffies(CPP_CMD_TIMEOUT_MS));
+	if (ret)
+		pr_err("error in mod_timer\n");
+
+	pr_err("Rescheduling for identity=0x%x, frame_id=%03d\n",
+		this_frame->identity, this_frame->frame_id);
+	msm_cpp_write(0x6, cpp_timer.data.cpp_dev->base);
+	msm_cpp_dump_frame_cmd(this_frame->cpp_cmd_msg,
+		this_frame->msg_len);
+	for (i = 0; i < this_frame->msg_len; i++)
+		msm_cpp_write(this_frame->cpp_cmd_msg[i],
+			cpp_timer.data.cpp_dev->base);
+	cpp_timer.data.cpp_dev->timeout_trial_cnt++;
+	return;
 }
 
 void cpp_timer_callback(unsigned long data)
@@ -1753,14 +1771,10 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 
 		CPP_DBG("VIDIOC_MSM_CPP_GET_EVENTPAYLOAD\n");
 		event_qcmd = msm_dequeue(queue, list_eventdata);
-		if (!event_qcmd) {
-			pr_err("no queue cmd available");
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
-		}
-		process_frame = event_qcmd->command;
-		CPP_DBG("fid %d\n", process_frame->frame_id);
-		if (copy_to_user((void __user *)ioctl_ptr->ioctl_ptr,
+		if (event_qcmd) {
+			process_frame = event_qcmd->command;
+			CPP_DBG("fid %d\n", process_frame->frame_id);
+			if (copy_to_user((void __user *)ioctl_ptr->ioctl_ptr,
 					process_frame,
 					sizeof(struct msm_cpp_frame_info_t))) {
 						mutex_unlock(&cpp_dev->mutex);
@@ -1779,7 +1793,11 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			process_frame = NULL;
 			kfree(event_qcmd);
 			event_qcmd = NULL;
-			break;
+		} else {
+			pr_err("Empty command list\n");
+			return -EFAULT;
+		}
+		break;
 	}
 	case VIDIOC_MSM_CPP_SET_CLOCK: {
 		struct msm_cpp_clock_settings_t clock_settings;
