@@ -399,8 +399,11 @@ static void pp_ad_bypass_config(struct mdss_ad_info *ad,
 				struct mdss_mdp_ctl *ctl, u32 num, u32 *opmode);
 static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd);
 static void pp_ad_cfg_lut(char __iomem *addr, u32 *data);
-static int pp_ad_attenuate_bl(u32 bl, u32 *bl_out,
-		struct msm_fb_data_type *mfd);
+static int pp_ad_attenuate_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out);
+static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
+		int inv);
+static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
+		bool *bl_out_notify);
 static int pp_num_to_side(struct mdss_mdp_ctl *ctl, u32 num);
 static inline bool pp_sts_is_enabled(u32 sts, int side);
 static inline void pp_sts_set_split_bits(u32 *sts, u32 bits);
@@ -1842,6 +1845,44 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 	}
 
 	mdss_pp_res->pp_disp_flags[disp_num] |= flags;
+
+	if (dspp_num < mdata->nad_cfgs) {
+		ret = mdss_mdp_get_ad(ctl->mfd, &ad);
+		if (ret) {
+			pr_warn("Failed to get AD info, err = %d\n", ret);
+			return ret;
+		}
+		if (ctl->mfd->panel_info->type == WRITEBACK_PANEL) {
+			bl_mfd = mdss_get_mfd_from_index(0);
+			if (!bl_mfd) {
+				ret = -EINVAL;
+				pr_warn("Failed to get primary FB bl handle, err = %d\n",
+						ret);
+				return ret;
+			}
+		} else {
+			bl_mfd = ctl->mfd;
+		}
+
+		mutex_lock(&ad->lock);
+		bl = bl_mfd->ad_bl_level;
+		if (PP_AD_STATE_CFG & ad->state)
+			pp_ad_cfg_write(&mdata->ad_off[dspp_num], ad);
+		if (PP_AD_STATE_INIT & ad->state)
+			pp_ad_init_write(&mdata->ad_off[dspp_num], ad, ctl);
+		if ((PP_AD_STATE_DATA & ad->state) &&
+				(ad->sts & PP_STS_ENABLE)) {
+			ad->last_bl = bl;
+			linear_map(bl, &ad->bl_data,
+					ad->bl_mfd->panel_info->bl_max,
+					MDSS_MDP_AD_BL_SCALE);
+			pp_ad_input_write(&mdata->ad_off[dspp_num], ad);
+		}
+		if ((PP_AD_STATE_VSYNC & ad->state) && ad->calc_itr)
+			ctl->add_vsync_handler(ctl, &ad->handle);
+		mutex_unlock(&ad->lock);
+	}
+
 	return 0;
 }
 
@@ -1916,6 +1957,89 @@ void mdss_mdp_pp_term(struct device *dev)
 		mutex_unlock(&mdss_pp_mutex);
 	}
 }
+int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
+{
+	if (!mfd) {
+		pr_err("Invalid mfd.\n");
+		return -EPERM;
+	}
+
+	mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
+	return 0;
+}
+
+static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
+		bool *bl_out_notify)
+{
+	int ret = -1;
+	int temp = bl_in;
+	u32 ad_bl_out = 0;
+	struct mdss_ad_info *ad;
+
+	ret = mdss_mdp_get_ad(mfd, &ad);
+	if (ret == -ENODEV) {
+		pr_debug("AD not supported on device.\n");
+		return ret;
+	} else if (ret || !ad) {
+		pr_err("Failed to get ad info: ret = %d, ad = 0x%p.\n",
+				ret, ad);
+		return ret;
+	}
+
+	mutex_lock(&ad->lock);
+	if (!(ad->state & PP_AD_STATE_RUN)) {
+		pr_debug("AD is not running.\n");
+		mutex_unlock(&ad->lock);
+		return -EPERM;
+	}
+
+	if (!ad->bl_mfd || !ad->bl_mfd->panel_info ||
+			!ad->bl_att_lut) {
+		pr_err("Invalid ad info: bl_mfd = 0x%p, ad->bl_mfd->panel_info = 0x%p, bl_att_lut = 0x%p\n",
+				ad->bl_mfd,
+				(!ad->bl_mfd) ? NULL : ad->bl_mfd->panel_info,
+				ad->bl_att_lut);
+		mutex_unlock(&ad->lock);
+		return -EINVAL;
+	}
+
+	ret = pp_ad_linearize_bl(ad, bl_in, &temp,
+			MDP_PP_AD_BL_LINEAR);
+	if (ret) {
+		pr_err("Failed to linearize BL: %d\n", ret);
+		mutex_unlock(&ad->lock);
+		return ret;
+	}
+
+	ret = pp_ad_attenuate_bl(ad, temp, &temp);
+	if (ret) {
+		pr_err("Failed to attenuate BL: %d\n", ret);
+		mutex_unlock(&ad->lock);
+		return ret;
+	}
+	ad_bl_out = temp;
+
+	ret = pp_ad_linearize_bl(ad, temp, &temp, MDP_PP_AD_BL_LINEAR_INV);
+	if (ret) {
+		pr_err("Failed to inverse linearize BL: %d\n", ret);
+		mutex_unlock(&ad->lock);
+		return ret;
+	}
+	*bl_out = temp;
+
+	if(!mfd->ad_bl_level)
+		mfd->ad_bl_level = bl_in;
+
+	if (ad_bl_out != mfd->ad_bl_level) {
+		mfd->ad_bl_level = ad_bl_out;
+		*bl_out_notify = true;
+	}
+
+	pp_ad_invalidate_input(mfd);
+	mutex_unlock(&ad->lock);
+	return 0;
+}
+
 static int pp_get_dspp_num(u32 disp_num, u32 *dspp_num)
 {
 	int i;
@@ -4478,6 +4602,8 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 		mutex_lock(&bl_mfd->bl_lock);
 		bl = bl_mfd->bl_level;
 		pr_debug("dirty data, last_bl = %d ", ad->last_bl);
+		bl = bl_mfd->ad_bl_level;
+
 		if ((ad->cfg.mode == MDSS_AD_MODE_AUTO_STR) &&
 							(ad->last_bl != bl)) {
 			ad->last_bl = bl;
