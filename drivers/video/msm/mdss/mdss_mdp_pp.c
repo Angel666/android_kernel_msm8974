@@ -1381,11 +1381,17 @@ static int pp_mixer_setup(u32 disp_num,
 			pgc_config->num_b_stages = GC_LUT_SEGMENTS;
 			pp_update_argc_lut(addr, pgc_config);
 		}
+		if (pgc_config->flags & MDP_PP_OPS_DISABLE)
+			pp_sts->argc_sts &= ~PP_STS_ENABLE;
+		else if (pgc_config->flags & MDP_PP_OPS_ENABLE)
+			pp_sts->argc_sts |= PP_STS_ENABLE;
+
 		ctl->flush_bits |= lm_bitmask;
 	}
 
 	/* update LM opmode if LM needs flush */
-	if (flags & PP_FLAGS_DIRTY_ARGC) {
+	if ((pp_sts->argc_sts & PP_STS_ENABLE) &&
+		(flags & PP_FLAGS_DIRTY_ARGC)) {
 		addr = mixer->base + MDSS_MDP_REG_LM_OP_MODE;
 		opmode = readl_relaxed(addr);
 		opmode |= (1 << 0); /* GC_LUT_EN */
