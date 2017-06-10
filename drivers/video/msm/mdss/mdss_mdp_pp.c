@@ -1691,7 +1691,8 @@ flush_exit:
 		mutex_unlock(&ad->lock);
 	}
 
-	writel_relaxed(opmode, base + MDSS_MDP_REG_DSPP_OP_MODE);
+flush_exit:
+	writel_relaxed(opmode, basel + MDSS_MDP_REG_DSPP_OP_MODE);
 	ctl->flush_bits |= BIT(13 + dspp_num);
 	wmb();
 dspp_exit:
@@ -2105,9 +2106,6 @@ int mdss_mdp_pa_config(struct mdp_pa_cfg_data *config,
 	u32 disp_num, dspp_num = 0;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	char __iomem *pa_addr;
-
-	if (mdata->mdp_rev >= MDSS_MDP_HW_REV_103)
-		return -EINVAL;
 
 	if ((config->block < MDP_LOGICAL_BLOCK_DISP_0) ||
 			(config->block >= MDP_BLOCK_MAX))
@@ -2832,9 +2830,6 @@ int mdss_mdp_argc_config(struct mdp_pgc_lut_data *config,
 	char __iomem *argc_addr = 0;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 
-	if (mdata == NULL)
-		return -EPERM;
-
 	if ((PP_BLOCK(config->block) < MDP_LOGICAL_BLOCK_DISP_0) ||
 		(PP_BLOCK(config->block) >= MDP_BLOCK_MAX))
 		return -EINVAL;
@@ -3040,28 +3035,6 @@ int mdss_mdp_dither_config(struct mdp_dither_cfg_data *config,
 	return 0;
 }
 
-static int pp_gm_has_invalid_lut_size(struct mdp_gamut_cfg_data *config)
-{
-	if (config->tbl_size[0] != GAMUT_T0_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[1] != GAMUT_T1_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[2] != GAMUT_T2_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[3] != GAMUT_T3_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[4] != GAMUT_T4_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[5] != GAMUT_T5_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[6] != GAMUT_T6_SIZE)
-		return -EINVAL;
-	if (config->tbl_size[7] != GAMUT_T7_SIZE)
-		return -EINVAL;
-
-	return 0;
-}
-
 int mdss_mdp_gamut_config(struct mdp_gamut_cfg_data *config,
 					u32 *copyback)
 {
@@ -3254,7 +3227,13 @@ static int pp_histogram_enable(struct pp_hist_col_info *hist_info,
 	hist_info->hist_cnt_read = 0;
 	hist_info->hist_cnt_sent = 0;
 	hist_info->hist_cnt_time = 0;
-	mdss_mdp_hist_intr_req(&mdata->hist_intr, 3 << shift_bit, true);
+	spin_lock_irqsave(&hist_info->hist_lock, flag);
+	hist_info->read_request = false;
+	hist_info->col_state = HIST_RESET;
+	hist_info->col_en = true;
+	spin_unlock_irqrestore(&hist_info->hist_lock, flag);
+	hist_info->is_kick_ready = true;
+	mdss_mdp_hist_irq_enable(3 << shift_bit);
 	writel_relaxed(req->frame_cnt, ctl_base + 8);
 	/* Kick out reset start */
 	writel_relaxed(1, ctl_base + 4);
@@ -3263,8 +3242,7 @@ exit:
 	return ret;
 }
 
-#define MDSS_MAX_HIST_BIN_SIZE 16777215
-int mdss_mdp_hist_start(struct mdp_histogram_start_req *req)
+int mdss_mdp_histogram_start(struct mdp_histogram_start_req *req)
 {
 	u32 done_shift_bit;
 	char __iomem *ctl_base;
@@ -3384,7 +3362,7 @@ exit:
 	return ret;
 }
 
-int mdss_mdp_hist_stop(u32 block)
+int mdss_mdp_histogram_stop(u32 block)
 {
 	int i, ret = 0;
 	char __iomem *ctl_base;
@@ -3458,150 +3436,6 @@ int mdss_mdp_hist_stop(u32 block)
 hist_stop_clk:
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
 hist_stop_exit:
-	return ret;
-}
-
-/**
- * mdss_mdp_hist_intr_req() - Request changes the histogram interupts
- * @intr: structure containting state of interrupt register
- * @bits: the bits on interrupt register that should be changed
- * @en: true if bits should be set, false if bits should be cleared
- *
- * Adds or removes the bits from the interrupt request.
- *
- * Does not store reference count for each bit. I.e. a bit with multiple
- * enable requests can be disabled with a single disable request.
- *
- * Return: 0 if uneventful, errno on invalid input
- */
-int mdss_mdp_hist_intr_req(struct mdss_intr *intr, u32 bits, bool en)
-{
-	unsigned long flag;
-	int ret = 0;
-	if (!intr) {
-		pr_err("NULL addr passed, %p", intr);
-		return -EINVAL;
-	}
-
-	spin_lock_irqsave(&intr->lock, flag);
-	if (en)
-		intr->req |= bits;
-	else
-		intr->req &= ~bits;
-	spin_unlock_irqrestore(&intr->lock, flag);
-
-	mdss_mdp_hist_intr_setup(intr, MDSS_IRQ_REQ);
-
-	return ret;
-}
-
-
-#define MDSS_INTR_STATE_ACTIVE	1
-#define MDSS_INTR_STATE_NULL	0
-#define MDSS_INTR_STATE_SUSPEND	-1
-
-/**
- * mdss_mdp_hist_intr_setup() - Manage intr and clk depending on requests.
- * @intr: structure containting state of intr reg
- * @state: MDSS_IRQ_SUSPEND if suspend is needed,
- *         MDSS_IRQ_RESUME if resume is needed,
- *         MDSS_IRQ_REQ if neither (i.e. requesting an interrupt)
- *
- * This function acts as a gatekeeper for the interrupt, making sure that the
- * MDP clocks are enabled while the interrupts are enabled to prevent
- * unclocked accesses.
- *
- * To reduce code repetition, 4 state transitions have been encoded here. Each
- * transition updates the interrupt's state structure (mdss_intr) to reflect
- * the which bits have been requested (intr->req), are currently enabled
- * (intr->curr), as well as defines which interrupt bits need to be enabled or
- * disabled ('en' and 'dis' respectively). The 4th state is not explicity
- * coded in the if/else chain, but is for MDSS_IRQ_REQ's when the interrupt
- * is in suspend, in which case, the only change required (intr->req being
- * updated) has already occured in the calling function.
- *
- * To control the clock, which can't be requested while holding the spinlock,
- * the inital state is compared with the exit state to detect when the
- * interrupt needs a clock.
- *
- * The clock requests surrounding the majority of this function serve to
- * enable the register writes to change the interrupt register, as well as to
- * prevent a race condition that could keep the clocks on (due to mdp_clk_cnt
- * never being decremented below 0) when a enable/disable occurs but the
- * disable requests the clocks disabled before the enable is able to request
- * the clocks enabled.
- *
- * Return: 0 if uneventful, errno on repeated action or invalid input
- */
-int mdss_mdp_hist_intr_setup(struct mdss_intr *intr, int type)
-{
-	unsigned long flag;
-	int ret = 0, req_clk = 0;
-	u32 en = 0, dis = 0;
-	u32 diff, init_curr;
-	int init_state;
-	if (!intr) {
-		WARN(1, "NULL intr pointer");
-		return -EINVAL;
-	}
-
-	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
-	spin_lock_irqsave(&intr->lock, flag);
-
-	init_state = intr->state;
-	init_curr = intr->curr;
-
-	if (type == MDSS_IRQ_RESUME) {
-		/* resume intrs */
-		if (intr->state == MDSS_INTR_STATE_ACTIVE) {
-			ret = -EPERM;
-			goto exit;
-		}
-		en = intr->req;
-		dis = 0;
-		intr->curr = intr->req;
-		intr->state = intr->curr ?
-				MDSS_INTR_STATE_ACTIVE : MDSS_INTR_STATE_NULL;
-	} else if (type == MDSS_IRQ_SUSPEND) {
-		/* suspend intrs */
-		if (intr->state == MDSS_INTR_STATE_SUSPEND) {
-			ret = -EPERM;
-			goto exit;
-		}
-		en = 0;
-		dis = intr->curr;
-		intr->curr = 0;
-		intr->state = MDSS_INTR_STATE_SUSPEND;
-	} else if (intr->state != MDSS_IRQ_SUSPEND) {
-		/* Not resuming/suspending or in suspend state */
-		diff = intr->req ^ intr->curr;
-		en = diff & ~intr->curr;
-		dis = diff & ~intr->req;
-		intr->curr = intr->req;
-		intr->state = intr->curr ?
-				MDSS_INTR_STATE_ACTIVE : MDSS_INTR_STATE_NULL;
-	}
-
-	if (en)
-		mdss_mdp_hist_irq_enable(en);
-	if (dis)
-		mdss_mdp_hist_irq_disable(dis);
-
-	if ((init_state != MDSS_INTR_STATE_ACTIVE) &&
-				(intr->state == MDSS_INTR_STATE_ACTIVE))
-		req_clk = 1;
-	else if ((init_state == MDSS_INTR_STATE_ACTIVE) &&
-				(intr->state != MDSS_INTR_STATE_ACTIVE))
-		req_clk = -1;
-
-exit:
-	spin_unlock_irqrestore(&intr->lock, flag);
-	if (req_clk < 0)
-		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
-	else if (req_clk > 0)
-		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
-
-	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
 	return ret;
 }
 
@@ -3757,8 +3591,7 @@ int mdss_mdp_hist_collect(struct mdp_histogram_data *hist)
 			dspp_num = mixer_id[i];
 			ctl_base = mdss_mdp_get_dspp_addr_off(dspp_num) +
 				MDSS_MDP_REG_DSPP_HIST_CTL_BASE;
-			exp_sum = (mdata->mixer_intf[dspp_num].width *
-					mdata->mixer_intf[dspp_num].height);
+			ret = pp_hist_collect(hist, hist_info, ctl_base);
 			if (ret)
 				temp_ret = ret;
 			ret = pp_hist_collect(hist, hists[i], ctl_base,
@@ -3859,14 +3692,7 @@ int mdss_mdp_hist_collect(struct mdp_histogram_data *hist)
 			hist_info = &pipe->pp_res.hist;
 			ctl_base = pipe->base +
 				MDSS_MDP_REG_VIG_HIST_CTL_BASE;
-			if (ret)
-				temp_ret = ret;
-			ret = pp_hist_collect(hist, hist_info, ctl_base,
-								exp_sum);
-			if (ret)
-				pr_debug("hist error: pipe[%d] collect: %d\n",
-					pipe->num, ret);
-
+			ret = pp_hist_collect(hist, hist_info, ctl_base);
 			mdss_mdp_pipe_unmap(pipe);
 		}
 		for (i = pipe_num; i < MDSS_PP_ARG_NUM; i++) {
@@ -4268,6 +4094,7 @@ int mdss_mdp_ad_config(struct msm_fb_data_type *mfd,
 	}
 ad_config_exit:
 	mutex_unlock(&ad->lock);
+	ctl = mfd_to_ctl(mfd);
 	return ret;
 }
 
@@ -4275,7 +4102,6 @@ int mdss_mdp_ad_input(struct msm_fb_data_type *mfd,
 			struct mdss_ad_input *input, int wait) {
 	int ret = 0;
 	struct mdss_ad_info *ad;
-	u32 bl;
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
 	if (ret)
@@ -4825,9 +4651,9 @@ static void pp_ad_calc_worker(struct work_struct *work)
 		ctl->remove_vsync_handler(ctl, &ad->handle);
 	}
 	mutex_unlock(&ad->lock);
-	mutex_lock(&ctl->lock);
+	mutex_lock(&mfd->lock);
 	ctl->flush_bits |= BIT(13 + ad->num);
-	mutex_unlock(&ctl->lock);
+	mutex_unlock(&mfd->lock);
 
 	/* Trigger update notify to wake up those waiting for display updates */
 	mdss_fb_update_notify_update(bl_mfd);
