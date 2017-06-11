@@ -931,11 +931,18 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 
 	if ((pdata) && (pdata->set_backlight)) {
-		if (mfd->mdp.ad_calc_bl)
-			(*mfd->mdp.ad_calc_bl)(mfd, temp, &temp,
-					&bl_notify_needed);
-		if (bl_notify_needed)
-			mdss_fb_bl_update_notify(mfd);
+		if (mfd->mdp.ad_calc_bl) {
+			if (mfd->ad_bl_level == 0)
+				mfd->ad_bl_level = temp;
+			ad_bl = mfd->ad_bl_level;
+			ret = (*mfd->mdp.ad_calc_bl)(mfd, temp, &temp, &ad_bl);
+			if ((!ret) && (mfd->ad_bl_level != ad_bl) &&
+					mfd->mdp.ad_invalidate_input) {
+				mfd->ad_bl_level = ad_bl;
+				(*mfd->mdp.ad_invalidate_input)(mfd);
+				bl_notify_needed = true;
+			}
+		}
 
 		mfd->bl_level_prev_scaled = mfd->bl_level_scaled;
 		if (!IS_CALIB_MODE_BL(mfd))
@@ -950,12 +957,16 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 		 */
 		if (mfd->bl_level_scaled == temp) {
 			mfd->bl_level = bkl_lvl;
+				return;
 		} else {
 			pr_debug("backlight sent to panel :%d\n", temp);
 			pdata->set_backlight(pdata, temp);
 			mfd->bl_level = bkl_lvl;
 			mfd->bl_level_scaled = temp;
+			bl_notify_needed = true;
 		}
+		if (bl_notify_needed)
+			mdss_fb_bl_update_notify(mfd);
 	}
 }
 
@@ -965,22 +976,29 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 	u32 temp;
 	u32 ad_bl;
 
-	if (mfd->unset_bl_level) {
-		mutex_lock(&mfd->bl_lock);
-		if (!mfd->bl_updated) {
-			pdata = dev_get_platdata(&mfd->pdev->dev);
-			if ((pdata) && (pdata->set_backlight)) {
-				mfd->bl_level = mfd->unset_bl_level;
-				temp = mfd->bl_level;
-				if (mfd->mdp.ad_calc_bl)
-					(*mfd->mdp.ad_calc_bl)(mfd, temp, &temp,
-								&bl_notify);
-				if (bl_notify)
-					mdss_fb_bl_update_notify(mfd);
-				pdata->set_backlight(pdata, temp);
-				mfd->bl_level_scaled = mfd->unset_bl_level;
-				mfd->bl_updated = 1;
+	mutex_lock(&mfd->bl_lock);
+	if (mfd->unset_bl_level && !mfd->bl_updated) {
+		pdata = dev_get_platdata(&mfd->pdev->dev);
+		if ((pdata) && (pdata->set_backlight)) {
+			mfd->bl_level = mfd->unset_bl_level;
+			temp = mfd->bl_level;
+			if (mfd->mdp.ad_calc_bl) {
+				if (mfd->ad_bl_level == 0)
+					mfd->ad_bl_level = temp;
+				ad_bl = mfd->ad_bl_level;
+				ret = (*mfd->mdp.ad_calc_bl)(mfd, temp, &temp,
+						&ad_bl);
+				if ((!ret) && (mfd->ad_bl_level != ad_bl) &&
+						mfd->mdp.ad_invalidate_input) {
+					mfd->ad_bl_level = ad_bl;
+					(*mfd->mdp.ad_invalidate_input)(mfd);
+				}
+
 			}
+			pdata->set_backlight(pdata, temp);
+			mfd->bl_level_scaled = mfd->unset_bl_level;
+			mfd->bl_updated = 1;
+			mdss_fb_bl_update_notify(mfd);
 		}
 		mutex_unlock(&mfd->bl_lock);
 	}

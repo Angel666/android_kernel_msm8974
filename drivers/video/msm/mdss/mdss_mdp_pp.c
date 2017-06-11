@@ -424,8 +424,7 @@ static int pp_ad_attenuate_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out);
 static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
 		int inv);
 static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
-		bool *bl_out_notify);
-static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd);
+		int *ad_bl_out);
 static int pp_num_to_side(struct mdss_mdp_ctl *ctl, u32 num);
 static inline bool pp_sts_is_enabled(u32 sts, int side);
 static inline void pp_sts_set_split_bits(u32 *sts, u32 bits);
@@ -1909,7 +1908,7 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 				(ad->sts & PP_STS_ENABLE)) {
 			ad->last_bl = bl;
 			linear_map(bl, &ad->bl_data,
-					bl_mfd->panel_info->bl_max,
+					ad->bl_mfd->panel_info->bl_max,
 					MDSS_MDP_AD_BL_SCALE);
 			pp_ad_input_write(&mdata->ad_off[dspp_num], ad);
 		}
@@ -2009,17 +2008,14 @@ void mdss_mdp_pp_term(struct device *dev)
 }
 int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
 {
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-
-	if ((!mfd) || (!mdata)) {
-		pr_err("Invalid mfd or mdata.\n");
+	if (!mfd) {
+		pr_err("Invalid mfd.\n");
 		return -EPERM;
 	}
 
-	if (mdata->nad_cfgs) {
-		mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
-		mfd->mdp.ad_shutdown_cleanup = pp_ad_shutdown_cleanup;
-	}
+	mfd->mdp.ad_invalidate_input = pp_ad_invalidate_input;
+	mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
+
 	return 0;
 }
 
@@ -2041,8 +2037,6 @@ int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 	}
 
 	mutex_lock(&ad->lock);
-	if (!mfd->ad_bl_level)
-		mfd->ad_bl_level = bl_in;
 	if (!(ad->state & PP_AD_STATE_RUN)) {
 		pr_debug("AD is not running.\n");
 		mutex_unlock(&ad->lock);
@@ -2083,54 +2077,6 @@ int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 	}
 	*bl_out = temp;
 	mutex_unlock(&ad->lock);
-	return 0;
-}
-
-static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	struct mdss_mdp_ctl *ctl;
-	struct mdss_ad_info *ad;
-	bool needs_queue_cleanup = true;
-	int i = 0, ret = 0;
-
-	if ((!mdata) || (!mfd))
-		return -EPERM;
-
-	if (!mdata->ad_calc_wq)
-		return 0;
-
-	ret = mdss_mdp_get_ad(mfd, &ad);
-	if (ret) {
-		ret = -EINVAL;
-		pr_debug("failed to get ad_info, err = %d\n", ret);
-		return ret;
-	}
-
-	if (!ad->mfd)
-		return 0;
-
-	ad->mfd = NULL;
-	ctl = mfd_to_ctl(mfd);
-	if (ctl && ctl->remove_vsync_handler)
-		ctl->remove_vsync_handler(ctl, &ad->handle);
-	cancel_work_sync(&ad->calc_work);
-
-	/* Check if any other AD config is active */
-	for (i = 0; i < mdata->nad_cfgs; i++) {
-		ad = &mdata->ad_cfgs[i];
-		if (ad->mfd) {
-			needs_queue_cleanup = false;
-			break;
-		}
-	}
-
-	/* Destroy work queue if all AD configs are inactive */
-	if (needs_queue_cleanup) {
-		destroy_workqueue(mdata->ad_calc_wq);
-		mdata->ad_calc_wq = NULL;
-	}
-
 	return 0;
 }
 
