@@ -1200,7 +1200,7 @@ static int msm_otg_resume(struct msm_otg *motg)
 				~(PHY_IDHV_INTEN | PHY_OTGSESSVLDHV_INTEN);
 		phy_ctrl_val &= ~(PHY_CLAMP_DPDMSE_EN | PHY_DMSE_INTEN |
 					PHY_DPSE_INTEN);
-		writel_relaxed(phy_ctrl_val, motg->usb_phy_ctrl_reg);
+		writel_relaxed(phy_ctrl_val, USB_PHY_CTRL);
 		motg->lpm_flags &= ~PHY_RETENTIONED;
 	}
 
