@@ -145,6 +145,40 @@ static int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 
         return load;
 }
+enum load_calc_quirks {
+	LOAD_CALC_NO_QUIRKS = 0,
+	LOAD_CALC_IGNORE_TURBO_LOAD = 1 << 0,
+	LOAD_CALC_IGNORE_THUMBNAIL_LOAD = 1 << 1,
+	LOAD_CALC_IGNORE_NON_REALTIME_LOAD = 1 << 2,
+};
+
+static int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
+		enum load_calc_quirks quirks)
+{
+	int load = 0;
+
+	if (!(inst->state >= MSM_VIDC_OPEN_DONE &&
+		inst->state < MSM_VIDC_STOP_DONE))
+		return 0;
+
+	load = msm_comm_get_mbs_per_sec(inst);
+
+	if (is_thumbnail_session(inst)) {
+		if (quirks & LOAD_CALC_IGNORE_THUMBNAIL_LOAD)
+			load = 0;
+	}
+
+	if (is_turbo_session(inst)) {
+		if (!(quirks & LOAD_CALC_IGNORE_TURBO_LOAD))
+			load = inst->core->resources.max_load;
+	}
+
+	if (is_non_realtime_session(inst) &&
+		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD))
+		load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
+
+        return load;
+}
 
 static int msm_comm_get_load(struct msm_vidc_core *core,
 	enum session_type type, enum load_calc_quirks quirks)
