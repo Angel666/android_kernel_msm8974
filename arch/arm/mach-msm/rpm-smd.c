@@ -1397,6 +1397,8 @@ static int __devinit msm_rpm_dev_probe(struct platform_device *pdev)
 		pr_info("Cannot open RPM channel %s %d\n", msm_rpm_data.ch_name,
 				msm_rpm_data.ch_type);
 
+		BUG_ON(!standalone);
+		complete(&msm_rpm_data.smd_open);
 	}
 
 	wait_for_completion(&msm_rpm_data.smd_open);
