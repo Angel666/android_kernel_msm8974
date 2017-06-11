@@ -266,8 +266,22 @@ static struct kgsl_cmdbatch *_get_cmdbatch(struct adreno_context *drawctxt)
 		 * If syncpoints are pending start the canary timer if
 		 * it hasn't already been started
 		 */
-		if (!timer_pending(&cmdbatch->timer))
-			mod_timer(&cmdbatch->timer, jiffies + (5 * HZ));
+		if (pending) {
+			/*
+			 * If syncpoints are pending start the canary timer if
+			 * it hasn't already been started
+			 */
+			if (!timer_pending(&cmdbatch->timer))
+				mod_timer(&cmdbatch->timer, jiffies + msecs_to_jiffies(5000));
+			spin_unlock(&cmdbatch->lock);
+		} else {
+			/*
+			 * Otherwise, delete the timer to make sure it is good
+			 * and dead before queuing the buffer
+			 */
+			spin_unlock(&cmdbatch->lock);
+			del_timer_sync(&cmdbatch->timer);
+		}
 
 		return ERR_PTR(-EAGAIN);
 	}
