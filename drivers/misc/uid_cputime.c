@@ -13,6 +13,8 @@
  *
  */
 
+#include <asm/thread_notify.h>
+
 #include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/hashtable.h>
@@ -20,7 +22,6 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/proc_fs.h>
-#include <linux/profile.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -29,7 +30,7 @@
 #define UID_HASH_BITS	10
 DECLARE_HASHTABLE(hash_table, UID_HASH_BITS);
 
-static DEFINE_MUTEX(uid_lock);
+static DEFINE_SPINLOCK(uid_lock);
 static struct proc_dir_entry *parent;
 
 struct uid_entry {
@@ -45,6 +46,7 @@ static struct uid_entry *find_uid_entry(uid_t uid)
 {
 	struct uid_entry *uid_entry;
 	struct hlist_node *node;
+
 	hash_for_each_possible(hash_table, uid_entry, node, hash, uid) {
 		if (uid_entry->uid == uid)
 			return uid_entry;
@@ -75,10 +77,12 @@ static int uid_stat_show(struct seq_file *m, void *v)
 {
 	struct uid_entry *uid_entry;
 	struct task_struct *task;
-	unsigned long bkt;
 	struct hlist_node *node;
+	cputime_t utime;
+	cputime_t stime;
+	unsigned long bkt;
 
-	mutex_lock(&uid_lock);
+	spin_lock(&uid_lock);
 
 	hash_for_each(hash_table, bkt, node, uid_entry, hash) {
 		uid_entry->active_stime = 0;
@@ -90,13 +94,14 @@ static int uid_stat_show(struct seq_file *m, void *v)
 		uid_entry = find_or_register_uid(task_uid(task));
 		if (!uid_entry) {
 			read_unlock(&tasklist_lock);
-			mutex_unlock(&uid_lock);
+			spin_unlock(&uid_lock);
 			pr_err("%s: failed to find the uid_entry for uid %d\n",
 						__func__, task_uid(task));
 			return -ENOMEM;
 		}
-		uid_entry->active_utime += task->utime;
-		uid_entry->active_stime += task->stime;
+		task_times(task, &utime, &stime);
+		uid_entry->active_utime += utime;
+		uid_entry->active_stime += stime;
 	}
 	read_unlock(&tasklist_lock);
 
@@ -110,7 +115,7 @@ static int uid_stat_show(struct seq_file *m, void *v)
 						cputime_to_usecs(total_stime));
 	}
 
-	mutex_unlock(&uid_lock);
+	spin_unlock(&uid_lock);
 	return 0;
 }
 
@@ -135,11 +140,10 @@ static ssize_t uid_remove_write(struct file *file,
 			const char __user *buffer, size_t count, loff_t *ppos)
 {
 	struct uid_entry *uid_entry;
-	struct hlist_node *tmp;
+	struct hlist_node *node, *tmp;
 	char uids[128];
 	char *start_uid, *end_uid = NULL;
 	long int uid_start = 0, uid_end = 0;
-	struct hlist_node *node;
 
 	if (count >= sizeof(uids))
 		count = sizeof(uids) - 1;
@@ -159,17 +163,17 @@ static ssize_t uid_remove_write(struct file *file,
 		return -EINVAL;
 	}
 
-	mutex_lock(&uid_lock);
+	spin_lock(&uid_lock);
 
 	for (; uid_start <= uid_end; uid_start++) {
-		hash_for_each_possible_safe(hash_table, uid_entry, node,
-						   tmp, hash, uid_start) {
+		hash_for_each_possible_safe(hash_table, uid_entry, node, tmp,
+							hash, uid_start) {
 			hash_del(&uid_entry->hash);
 			kfree(uid_entry);
 		}
 	}
 
-	mutex_unlock(&uid_lock);
+	spin_unlock(&uid_lock);
 	return count;
 }
 
@@ -179,30 +183,46 @@ static const struct file_operations uid_remove_fops = {
 	.write		= uid_remove_write,
 };
 
-static int process_notifier(struct notifier_block *self,
-			unsigned long cmd, void *v)
+static void uid_task_exit(struct task_struct *task)
 {
-	struct task_struct *task = v;
 	struct uid_entry *uid_entry;
-	uid_t uid;
+	uid_t uid = task_uid(task);
+	cputime_t utime, stime;
 
-	if (!task)
-		return NOTIFY_OK;
+	spin_lock(&uid_lock);
 
-	mutex_lock(&uid_lock);
-	uid = task_uid(task);
 	uid_entry = find_or_register_uid(uid);
 	if (!uid_entry) {
 		pr_err("%s: failed to find uid %d\n", __func__, uid);
 		goto exit;
 	}
 
-	uid_entry->utime += task->utime;
-	uid_entry->stime += task->stime;
+	task_times(task, &utime, &stime);
+	uid_entry->utime += utime;
+	uid_entry->stime += stime;
 
 exit:
-	mutex_unlock(&uid_lock);
-	return NOTIFY_OK;
+	spin_unlock(&uid_lock);
+}
+
+static int process_notifier(struct notifier_block *self,
+			unsigned long cmd, void *v)
+{
+	struct thread_info *thread = v;
+	struct task_struct *task = v ? thread->task : NULL;
+
+	if (!task)
+		return NOTIFY_DONE;
+
+	switch (cmd) {
+	case THREAD_NOTIFY_EXIT:
+		uid_task_exit(task);
+		break;
+	default:
+		break;
+	}
+
+	return NOTIFY_DONE;
 }
 
 static struct notifier_block process_notifier_block = {
@@ -222,10 +242,10 @@ static int __init proc_uid_cputime_init(void)
 	proc_create_data("remove_uid_range", S_IWUGO, parent, &uid_remove_fops,
 					NULL);
 
-	proc_create_data("show_uid_stat", S_IRUGO, parent, &uid_stat_fops,
+	proc_create_data("show_uid_stat", S_IWUGO, parent, &uid_stat_fops,
 					NULL);
 
-	profile_event_register(PROFILE_TASK_EXIT, &process_notifier_block);
+	thread_register_notifier(&process_notifier_block);
 
 	return 0;
 }
