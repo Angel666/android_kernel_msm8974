@@ -2241,6 +2241,12 @@ dput_out:
 	return retval;
 }
 
+static void free_mnt_ns(struct mnt_namespace *ns)
+{
+	put_user_ns(ns->user_ns);
+	kfree(ns);
+}
+
 /*
  * Assign a sequence number so we can detect when we attempt to bind
  * mount a reference to an older mount namespace into the current
@@ -2250,7 +2256,7 @@ dput_out:
  */
 static atomic64_t mnt_ns_seq = ATOMIC64_INIT(1);
 
-static struct mnt_namespace *alloc_mnt_ns(void)
+static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns)
 {
 	proc_free_inum(ns->proc_inum);
 	put_user_ns(ns->user_ns);
@@ -2307,7 +2313,7 @@ static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 	new = copy_tree(old, old->mnt.mnt_root, CL_COPY_ALL | CL_EXPIRE);
 	if (IS_ERR(new)) {
 		up_write(&namespace_sem);
-		kfree(new_ns);
+		free_mnt_ns(new_ns);
 		return ERR_CAST(new);
 	}
 	new_ns->root = new;
@@ -2348,7 +2354,7 @@ static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 }
 
 struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
-		 struct user_namespace *user_ns, struct fs_struct *new_fs)
+		struct user_namespace *user_ns, struct fs_struct *new_fs)
 {
 	struct mnt_namespace *new_ns;
 
