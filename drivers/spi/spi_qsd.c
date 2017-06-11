@@ -2247,19 +2247,15 @@ static int msm_spi_transfer_one_message(struct spi_master *master,
 	 * get local resources for each transfer to ensure we're in a good
 	 * state and not interfering with other EE's using this device
 	 */
-	if (dd->pdata->is_shared) {
-		if (get_local_resources(dd)) {
-			mutex_unlock(&dd->core_lock);
-			return -EINVAL;
-		}
+	if (get_local_resources(dd))
+		return -EINVAL;
 
-		reset_core(dd);
-		if (dd->use_dma) {
-			msm_spi_bam_pipe_connect(dd, &dd->bam.prod,
-					&dd->bam.prod.config);
-			msm_spi_bam_pipe_connect(dd, &dd->bam.cons,
-					&dd->bam.cons.config);
-		}
+	reset_core(dd);
+	if (dd->use_dma) {
+		msm_spi_bam_pipe_connect(dd, &dd->bam.prod,
+				&dd->bam.prod.config);
+		msm_spi_bam_pipe_connect(dd, &dd->bam.cons,
+				&dd->bam.cons.config);
 	}
 
 	if (dd->suspended || !msm_spi_is_valid_state(dd)) {
@@ -2299,17 +2295,12 @@ static int msm_spi_transfer_one_message(struct spi_master *master,
 	 * different context since we're running in the spi kthread here) to
 	 * prevent race conditions between us and any other EE's using this hw.
 	 */
-	if (dd->pdata->is_shared) {
-		if (dd->use_dma) {
-			msm_spi_bam_pipe_disconnect(dd, &dd->bam.prod);
-			msm_spi_bam_pipe_disconnect(dd, &dd->bam.cons);
-		}
-		put_local_resources(dd);
+	put_local_resources(dd);
+	if (dd->use_dma) {
+		msm_spi_bam_pipe_disconnect(dd, &dd->bam.prod);
+		msm_spi_bam_pipe_disconnect(dd, &dd->bam.cons);
 	}
-	mutex_unlock(&dd->core_lock);
-	if (dd->suspended)
-		wake_up_interruptible(&dd->continue_suspend);
-	status_error = dd->cur_msg->status;
+	dd->cur_msg->status = status_error;
 	spi_finalize_current_message(master);
 	return status_error;
 }
@@ -3391,14 +3382,9 @@ static int msm_spi_pm_suspend_runtime(struct device *device)
 	wait_event_interruptible(dd->continue_suspend,
 		!dd->transfer_pending);
 
-	if (dd->pdata && !dd->pdata->is_shared && dd->use_dma) {
-		msm_spi_bam_pipe_disconnect(dd, &dd->bam.prod);
-		msm_spi_bam_pipe_disconnect(dd, &dd->bam.cons);
-	}
 	if (dd->pdata && !dd->pdata->active_only)
 		msm_spi_clk_path_unvote(dd);
-	if (dd->pdata && !dd->pdata->is_shared)
-		put_local_resources(dd);
+
 suspend_exit:
 	return 0;
 }
@@ -3418,18 +3404,10 @@ static int msm_spi_pm_resume_runtime(struct device *device)
 
 	if (!dd->suspended)
 		return 0;
-	
-	if (!dd->pdata->is_shared)
-		get_local_resources(dd);
+
 	msm_spi_clk_path_init(dd);
 	if (!dd->pdata->active_only)
 		msm_spi_clk_path_vote(dd);
-	if (!dd->pdata->is_shared && dd->use_dma) {
-		msm_spi_bam_pipe_connect(dd, &dd->bam.prod,
-				&dd->bam.prod.config);
-		msm_spi_bam_pipe_connect(dd, &dd->bam.cons,
-				&dd->bam.cons.config);
-	}
 	dd->suspended = 0;
 
 resume_exit:
