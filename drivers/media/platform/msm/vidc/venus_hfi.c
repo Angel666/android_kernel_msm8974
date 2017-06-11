@@ -3793,6 +3793,46 @@ static int venus_hfi_get_fw_info(void *dev, struct hal_fw_info *fw_info)
 	const u32 smem_image_index_venus = 14 * 128;
 
 
+	rc = venus_hfi_core_release(device);
+	if (rc) {
+		dprintk(VIDC_ERR, "%s - failed to release venus core rc = %d\n",
+				__func__, rc);
+		goto exit;
+	}
+
+	dprintk(VIDC_ERR, "praying for firmware resurrection\n");
+
+	venus_hfi_unload_fw(device);
+
+	rc = venus_hfi_scale_buses(device, DDR_MEM);
+	if (rc) {
+		dprintk(VIDC_ERR, "Failed to scale buses");
+		goto exit;
+	}
+
+	rc = venus_hfi_load_fw(device);
+	if (rc) {
+		dprintk(VIDC_ERR, "%s - failed to load venus fw rc = %d\n",
+				__func__, rc);
+		goto exit;
+	}
+
+	dprintk(VIDC_ERR, "Hurray!! firmware has restarted\n");
+exit:
+	return rc;
+}
+
+static int venus_hfi_get_fw_info(void *dev, struct hal_fw_info *fw_info)
+{
+	int rc = 0, i = 0, j = 0;
+	struct venus_hfi_device *device = dev;
+	u32 smem_block_size = 0;
+	u8 *smem_table_ptr;
+	char version[VENUS_VERSION_LENGTH];
+	const u32 version_string_size = VENUS_VERSION_LENGTH;
+	const u32 smem_image_index_venus = 14 * 128;
+
+
 	if (!device|| !fw_info) {
 		dprintk(VIDC_ERR,
 			 "%s Invalid paramter: device = %p fw_info = %p\n",
