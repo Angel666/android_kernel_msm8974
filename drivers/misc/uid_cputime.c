@@ -78,9 +78,6 @@ static int uid_stat_show(struct seq_file *m, void *v)
 {
 	struct uid_entry *uid_entry;
 	struct task_struct *task, *temp;
-	struct hlist_node *node;
-	cputime_t utime;
-	cputime_t stime;
 	unsigned long bkt;
 
 	mutex_lock(&uid_lock);
@@ -108,7 +105,7 @@ static int uid_stat_show(struct seq_file *m, void *v)
 		uid_entry->active_utime += task->utime;
 		uid_entry->active_stime += task->stime;
 		uid_entry->active_power += task->cpu_power;
-	}
+	} while_each_thread(temp, task);
 	read_unlock(&tasklist_lock);
 
 	hash_for_each(hash_table, bkt, node, uid_entry, hash) {
