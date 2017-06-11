@@ -970,13 +970,6 @@ static void handle_sys_error(enum command_response cmd, void *data)
 				V4L2_EVENT_MSM_VIDC_SYS_ERROR);
 	}
 
-	hdev = core->device;
-	if (!hdev) {
-		dprintk(VIDC_ERR, "hdev in core is NULL\n");
-		mutex_unlock(&core->lock);
-		return;
-	}
-
         if (core->state == VIDC_CORE_INVALID) {
 		dprintk(VIDC_DBG, "Calling core_release\n");
 		rc = call_hfi_op(hdev, core_release,
@@ -996,31 +989,6 @@ static void handle_sys_error(enum command_response cmd, void *data)
         else
             msm_comm_unvote_buses(core, DDR_MEM);
 	mutex_unlock(&core->lock);
-}
-
-void msm_comm_session_clean(struct msm_vidc_inst *inst)
-{
-	int rc = 0;
-	struct hfi_device *hdev = NULL;
-
-	if (!inst || !inst->core || !inst->core->device) {
-		dprintk(VIDC_ERR, "%s invalid params\n", __func__);
-		return;
-	}
-
-	hdev = inst->core->device;
-	mutex_lock(&inst->lock);
-	if (hdev && inst->session) {
-		dprintk(VIDC_DBG, "cleaning up instance: 0x%p\n", inst);
-		rc = call_hfi_op(hdev, session_clean,
-				(void *) inst->session);
-		if (rc) {
-			dprintk(VIDC_ERR,
-				"Session clean failed :%p\n", inst);
-		}
-		inst->session = NULL;
-	}
-	mutex_unlock(&inst->lock);
 }
 
 static void handle_session_close(enum command_response cmd, void *data)
