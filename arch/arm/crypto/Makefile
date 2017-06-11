@@ -11,8 +11,6 @@ obj-$(CONFIG_CRYPTO_SHA512_ARM_NEON) += sha512-arm-neon.o
 aes-arm-y	:= aes-armv4.o aes_glue.o
 aes-arm-bs-y	:= aesbs-core.o aesbs-glue.o
 sha1-arm-y	:= sha1-armv4-large.o sha1_glue.o
-sha1-arm-neon-y	:= sha1-armv7-neon.o sha1_neon_glue.o
-sha512-arm-neon-y := sha512-armv7-neon.o sha512_neon_glue.o
 
 quiet_cmd_perl = PERL    $@
       cmd_perl = $(PERL) $(<) > $(@)
