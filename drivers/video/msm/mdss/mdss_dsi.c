@@ -770,6 +770,32 @@ static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
 		if (mipi->vsync_enable && mipi->hw_vsync_mode
 			&& gpio_is_valid(ctrl_pdata->disp_te_gpio)) {
 				mdss_dsi_set_tear_on(ctrl_pdata);
+#if defined(CONFIG_IUNI_U3)
+	ctrl_pdata->iovcc_enable_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
+	"qcom,iovcc-enable-gpio", 0);
+	if (gpio_is_valid(ctrl_pdata->iovcc_enable_gpio)) {
+	rc = gpio_request(ctrl_pdata->iovcc_enable_gpio, "iovcc_enable");
+if (rc) {
+		pr_err("request IOVCC_GPIO failed, rc=%d\n", rc);
+		return -ENODEV;
+	}
+	rc = gpio_tlmm_config(GPIO_CFG(
+			ctrl_pdata->iovcc_enable_gpio, 0,
+			GPIO_CFG_INPUT,
+			GPIO_CFG_NO_PULL,
+			GPIO_CFG_8MA),
+			GPIO_CFG_DISABLE);
+if (rc) {
+		pr_err("%s: unable to config iovcc tlmm = %d\n",
+			__func__, ctrl_pdata->iovcc_enable_gpio);
+		gpio_free(ctrl_pdata->iovcc_enable_gpio);
+		return -ENODEV;
+	}
+} else {
+		pr_err("%s:%d, iovcc en gpio not specified\n",
+			__func__, __LINE__);
+}
+#endif
 		}
 	}
 

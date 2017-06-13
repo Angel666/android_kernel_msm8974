@@ -244,7 +244,11 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 		if (!pinfo->panel_power_on) {
 			if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
 				gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
-
+#ifdef CONFIG_IUNI_U3
+		if (gpio_is_valid(ctrl_pdata->iovcc_enable_gpio)) {
+			gpio_direction_output(ctrl_pdata->iovcc_enable_gpio, 1);
+		}
+#endif
 			for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
 				gpio_set_value((ctrl_pdata->rst_gpio),
 					pdata->panel_info.rst_seq[i]);
@@ -270,6 +274,10 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			gpio_set_value((ctrl_pdata->disp_en_gpio), 0);
 			gpio_free(ctrl_pdata->disp_en_gpio);
 		}
+#ifdef CONFIG_IUNI_U3
+		if (gpio_is_valid(ctrl_pdata->iovcc_enable_gpio)) {
+			gpio_direction_output(ctrl_pdata->iovcc_enable_gpio, 0);
+}
 		gpio_set_value((ctrl_pdata->rst_gpio), 0);
 		gpio_free(ctrl_pdata->rst_gpio);
 		if (gpio_is_valid(ctrl_pdata->mode_gpio))
