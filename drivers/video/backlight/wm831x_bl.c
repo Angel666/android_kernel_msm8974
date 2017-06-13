@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Backlight driver for Wolfson Microelectronics WM831x PMICs
  *
  * Copyright 2009 Wolfson Microelectonics plc
